@@ -5,6 +5,8 @@ import random
 import json
 import os
 import io
+import re
+import base64
 from datetime import date, datetime
 from openai import OpenAI
 
@@ -22,12 +24,19 @@ LIB_INDEX = os.path.join(LIB_DIR, "index.json")
 
 # 손예진 톤 연기 디렉션 (실존 인물 복제 X, '분위기'만 연출)
 VOICE_INSTRUCTIONS = (
-    "You are a bright, warm Korean actress in her late 20s hosting a morning English "
-    "radio show — the cozy, sincere, slightly playful warmth of a beloved Korean drama lead. "
+    "You are a bright, warm Korean actress in her late 20s hosting a cozy English "
+    "radio show — the sincere, slightly playful warmth of a beloved Korean drama lead. "
     "Speak with gentle energy, never shouting. English lines: clear, natural American "
-    "pronunciation, a touch slower so a driver can follow. Korean lines: tender and lively, "
-    "like talking to a close friend named 호준. When you say '따라 해보세요', pause and slow down."
+    "pronunciation, a touch slower and well-articulated. Korean lines: tender and lively, "
+    "like talking to a close friend named 호준. When you say '따라 해보세요', slow down and "
+    "articulate each word clearly so it is easy to repeat."
 )
+
+# 0.5초 무음 mp3 (24kHz mono) — '따라 해보세요' 뒤 실제 쉼 구간용
+SILENCE_05_B64 = (
+    "SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjYwLjE2LjEwMAAAAAAAAAAAAAAA//OEwAAAAAAAAAAAAEluZm8AAAAPAAAAFwAACWAAHh4eHigoKCgzMzMzMz09PT1HR0dHUVFRUVFcXFxcZmZmZnBwcHBwenp6eoWFhYWPj4+Pj5mZmZmjo6Ojrq6urq64uLi4wsLCwszMzMzM19fX1+Hh4eHr6+vr6/X19fX/////AAAAAExhdmM2MC4zMQAAAAAAAAAAAAAAACQCoAAAAAAAAAlgDUx3IwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//NExAAAAANIAAAAAExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExFMAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKYAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMu//NExKwAAANIAAAAADEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//NExKwAAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//NExKwAAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV"
+)
+SILENCE_05 = base64.b64decode(SILENCE_05_B64)
 
 # 추천 보이스 (발랄 여성 톤 우선)
 VOICE_OPTIONS = {
@@ -273,38 +282,47 @@ def generate_radio_script(fmt_key, news_content):
     news_block = f"\n[참고 뉴스]\n{news_content}\n" if news_content else ""
     system_prompt = f"""
 당신은 아침 영어 라디오를 진행하는, 밝고 따뜻하며 살짝 장난기 있는 20대 후반 한국인 여배우 영어 선생님입니다.
-오늘의 단 한 명의 청취자는 운전 중인 '호준 씨'입니다. 운전에 방해되지 않게 다정하지만 과하지 않은 톤으로 진행하세요.
+오늘의 단 한 명의 청취자는 '호준 씨'입니다. 다정하지만 과하지 않은 톤으로, 귀로 듣고 따라 말하며 배우는 라디오를 진행하세요.
 
 [★ 오늘의 코너: {fmt['label']} ★]
 {fmt['brief']}
 
-[★ 운전자용 필수 규칙 — 영어 직후 한국어 해석 ★]
+[★ 필수 규칙 — 영어 직후 한국어 해석 ★]
 영어 문장 직후 "이건 ~라는 뜻이에요" 하고 정확한 한국어 해석과 핵심 단어 뜻을 다정하게 바로 이어 붙이세요. 절대 영어만 말하고 넘어가지 마세요.
 
-[★ 쉐도잉 구간 ★]
-가장 중요한 표현 1~2개는 "자, 저 따라 천천히 해볼게요" 하고 또박또박 읽은 뒤 "이제 호준 씨 차례예요, 따라 해보세요... 좋아요, 한 번 더!" 식으로 반복 연습 구간을 넣으세요.
+[★ 따라하기 시간 마커 — 매우 중요 ★]
+"따라 해보세요" 라고 말한 직후에는 반드시 마커 [[PAUSE:3]] 를 넣으세요. 이 마커 자리에서 호준 씨가 직접 따라 말할 시간이 주어집니다.
+- 짧은 표현이면 [[PAUSE:3]], 긴 문장이면 [[PAUSE:4]] 또는 [[PAUSE:5]] 를 쓰세요.
+- 마커 뒤에 "좋아요!" 같은 격려를 이어가세요. (마커 없이 바로 격려로 넘어가면 안 됩니다.)
+- 같은 표현을 한 번 더 시키려면 다시 [[PAUSE:3]] 를 넣으세요.
+
+[★ 지난 족보 복습 — 예문 + 따라하기 ★]
+오프닝에서 과거 족보 패턴({patterns_str}) 또는 단어({words_str}) 중 1~2개를 골라,
+각 표현마다 실전 예문 1~2개를 영어로 들려주고 한국어 해석을 붙이세요.
+그리고 그 예문도 "자, 저 따라 해보세요" → [[PAUSE:3]] → "좋아요!" 형태로 따라하기 시간을 꼭 주세요.
 
 [★ 상단 텍스트 ★]
 맨 위 [Today's Text] 섹션에 핵심 영어 원문(1~3문장)을 적고, 핵심 표현은 :red[핵심 표현] 형태로 컬러 처리.
 
-[★ 누적 족보 연동 ★]
-과거 족보 패턴({patterns_str}) 또는 단어({words_str}) 중 1~2개를 자연스럽게 소환해 실전 예문 1개와 한국어 해석을 들려주세요.
-
 [대본 구성]
 1. 📝 [Today's Text] (핵심 표현 컬러)
-2. ✨ 활기찬 오프닝 + 족보 복습
-3. 🎯 코너 본문 + 쉐도잉
-4. 📐 0.5초 영작 챌린지 (한국어 문장 주고 영작 유도 → 정답/해석)
-5. 🗂️ 오늘의 노트 & 클로징 (핵심 단어 3개 정리)
+2. ✨ 활기찬 오프닝 + 지난 족보 예문 복습 & 따라하기([[PAUSE]] 포함)
+3. 🎯 코너 본문 + 핵심 표현 따라하기([[PAUSE]] 포함)
+4. 📐 0.5초 영작 챌린지 (한국어 문장 주고 영작 유도 → [[PAUSE:4]] → 정답/해석)
+5. 🗂️ 오늘의 노트 & 클로징
+
+[★ 클로징 단어 정리 — 한글 발음 음 달기 ★]
+마지막에 오늘의 핵심 단어 3개를 정리할 때, 각 단어에 한글 발음을 괄호로 달아 읽기 쉽게 하세요.
+예: "Streamline (스트림라인) — 간소화하다", "Prospective (프러스펙티브) — 잠재적인".
 
 전체 약 1800자 내외, 자연스러운 라디오 멘트체.
 
-[★ 데이터 추출 마커 — 반드시 맨 마지막 줄 ★]
+[★ 데이터 추출 마커 — 반드시 맨 마지막 줄. 발음은 한글 음차 ★]
 |||EXTRACT|||
 NEW_PATTERN: 패턴구조 | 뜻
-NEW_WORD1: 단어1 | 뜻1
-NEW_WORD2: 단어2 | 뜻2
-NEW_WORD3: 단어3 | 뜻3
+NEW_WORD1: 단어1 | 한글발음1 | 뜻1
+NEW_WORD2: 단어2 | 한글발음2 | 뜻2
+NEW_WORD3: 단어3 | 한글발음3 | 뜻3
 """
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -334,9 +352,13 @@ def parse_and_update_storage(raw_script):
             except IndexError:
                 continue
             if "|" in content:
-                wrd, mean = content.split("|", 1)
-                if not any(w['word'].lower() == wrd.strip().lower() for w in st.session_state['hojun_past_words']):
-                    st.session_state['hojun_past_words'].append({"word": wrd.strip(), "meaning": mean.strip()})
+                bits = [b.strip() for b in content.split("|")]
+                if len(bits) >= 3:
+                    wrd, pron, mean = bits[0], bits[1], bits[2]
+                else:
+                    wrd, pron, mean = bits[0], "", bits[1]
+                if not any(w['word'].lower() == wrd.lower() for w in st.session_state['hojun_past_words']):
+                    st.session_state['hojun_past_words'].append({"word": wrd, "pron": pron, "meaning": mean})
                     added += 1
     st.session_state['total_learned'] += added
     return clean_script
@@ -345,7 +367,7 @@ def generate_instant_lesson(selected_item, item_type):
     system_prompt = (
         "당신은 밝고 따뜻한 20대 후반 한국인 여배우 영어 선생님입니다. 호준 씨가 고른 표현에 대해 "
         "비즈니스 실전 예문 2개를 주고, 각 예문의 한국어 뜻과 미묘한 뉘앙스를 톡톡 튀게 설명하세요. "
-        "영어 문장 뒤에는 반드시 한국어 해석을 바로 붙이세요(운전 중 청취)."
+        "영어 문장 뒤에는 반드시 한국어 해석을 바로 붙이세요."
     )
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -358,6 +380,10 @@ def generate_instant_lesson(selected_item, item_type):
 # ──────────────────────────────────────────────
 # 7. TTS (보이스 선택 + 청크 분할)
 # ──────────────────────────────────────────────
+def strip_pause_markers(text):
+    """화면 표시용: [[PAUSE]] 마커를 보기 좋은 표시로 치환"""
+    return re.sub(r"\[\[PAUSE(?::\d+(?:\.\d+)?)?\]\]", " 🔁 *(따라 말해보기)* ", text)
+
 def _chunk_text(text, limit=1600):
     chunks, cur = [], ""
     for line in text.split("\n"):
@@ -370,16 +396,34 @@ def _chunk_text(text, limit=1600):
 
 def text_to_speech(text, voice=None):
     voice = voice or st.session_state['voice']
+
+    def _tts_one(seg):
+        out = b""
+        for chunk in _chunk_text(seg):
+            if not chunk.strip():
+                continue
+            try:
+                resp = client.audio.speech.create(model="gpt-4o-mini-tts", voice=voice,
+                                                   input=chunk, instructions=VOICE_INSTRUCTIONS)
+            except Exception:
+                resp = client.audio.speech.create(model="tts-1", voice="nova", input=chunk)
+            out += resp.content
+        return out
+
+    # [[PAUSE]] 또는 [[PAUSE:3]] 마커 → 실제 무음 구간 삽입
+    parts = re.split(r"\[\[PAUSE(?::(\d+(?:\.\d+)?))?\]\]", text)
     audio = b""
-    for chunk in _chunk_text(text):
-        if not chunk.strip():
-            continue
-        try:
-            resp = client.audio.speech.create(model="gpt-4o-mini-tts", voice=voice,
-                                               input=chunk, instructions=VOICE_INSTRUCTIONS)
-        except Exception:
-            resp = client.audio.speech.create(model="tts-1", voice="nova", input=chunk)
-        audio += resp.content
+    i = 0
+    while i < len(parts):
+        seg = parts[i]
+        if seg and seg.strip():
+            audio += _tts_one(seg)
+        if i + 1 < len(parts):           # 다음 원소는 캡처된 초(또는 None)
+            dur = parts[i + 1]
+            seconds = float(dur) if dur else 3.5   # 기본 3.5초 따라하기 시간
+            reps = max(1, round(seconds / 0.5))
+            audio += SILENCE_05 * reps
+        i += 2
     return audio
 
 # ──────────────────────────────────────────────
@@ -428,7 +472,9 @@ with st.sidebar:
                 st.session_state['instant_audio'] = text_to_speech(lesson)
     st.subheader("📚 단어장")
     for w in st.session_state['hojun_past_words']:
-        if st.button(f"🗂️ {w['word']} : {w['meaning']}", key=f"wrd_{w['word']}", use_container_width=True):
+        pron = w.get('pron', '')
+        label = f"🗂️ {w['word']}" + (f" ({pron})" if pron else "") + f" : {w['meaning']}"
+        if st.button(label, key=f"wrd_{w['word']}", use_container_width=True):
             with st.spinner("🎙️ 원포인트 굽는 중..."):
                 lesson = generate_instant_lesson(f"{w['word']} ({w['meaning']})", "필수 비즈니스 단어")
                 st.session_state['instant_lesson'] = lesson
@@ -458,17 +504,18 @@ if st.button("▶️ 오늘 자 방송 듣기", use_container_width=True, type="
             news_content = get_news(fmt["needs_news"])
     st.toast(f"오늘의 코너: {fmt['label']}")
     with st.spinner("🎙️ 선생님이 원고를 톡톡 튀게 쓰는 중..."):
-        script = parse_and_update_storage(generate_radio_script(fmt_key, news_content))
+        script_raw = parse_and_update_storage(generate_radio_script(fmt_key, news_content))
     with st.spinner("🎵 밝고 따뜻한 목소리로 녹음 중 (약 10초)..."):
-        audio = text_to_speech(script)
+        audio = text_to_speech(script_raw)   # 마커 포함 원본으로 무음 삽입
+    script_display = strip_pause_markers(script_raw)
     today = str(date.today())
     if st.session_state['last_date'] != today:
         st.session_state['day_count'] += 1
         st.session_state['last_date'] = today
-    st.session_state['current_script'] = script
+    st.session_state['current_script'] = script_display
     st.session_state['current_audio'] = audio
     st.session_state['current_theme'] = fmt['label']
-    save_broadcast(script, audio, fmt['label'])
+    save_broadcast(script_display, audio, fmt['label'])
     save_progress()
     st.rerun()
 
