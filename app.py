@@ -291,6 +291,54 @@ def make_cheat_sentences(expr, meaning):
     except Exception:
         return []
 
+def get_yesterday_items():
+    """어제 새로 배운 표현 (60초 복습용)."""
+    y = str(date.today() - timedelta(days=1))
+    res = []
+    for _t, d, expr, mean in all_review_items():
+        if d.get('added', '') == y:
+            res.append((expr, mean))
+    return res
+
+# ── 3단계: 한국어→영어 말하기 퀴즈 + 음성 채점 ──
+def generate_quiz():
+    items = all_review_items()
+    hint = ""
+    if items:
+        _t, d, expr, mean = random.choice(items)
+        hint = f"가능하면 학습자의 족보 표현 '{expr}'({mean})를 자연스럽게 쓰게 되는 상황으로. "
+    prompt = (
+        "호준 씨(KCC 창호 B2B 영업팀장)를 위한 '한국어→영어 말하기' 퀴즈 1개를 만들어라. "
+        f"{hint}실제 영업/업무에서 쓸 법한 자연스러운 한국어 문장 1개와 모범 영어 답안을 주되, "
+        '아래 JSON으로만 출력(설명 금지): {"ko":"...","answer":"..."}'
+    )
+    try:
+        resp = client.chat.completions.create(model="gpt-4o-mini",
+                                              messages=[{"role": "user", "content": prompt}], temperature=0.7)
+        txt = resp.choices[0].message.content.strip().replace("```json", "").replace("```", "").strip()
+        return json.loads(txt)
+    except Exception:
+        return {"ko": "다음 주까지 견적서를 보내드리겠습니다.", "answer": "I'll send you the quote by next week."}
+
+def transcribe_audio(audio_bytes):
+    bio = io.BytesIO(audio_bytes); bio.name = "speech.wav"
+    tr = client.audio.transcriptions.create(model="whisper-1", file=bio, language="en")
+    return tr.text
+
+def grade_answer(ko, model_answer, user_said):
+    prompt = (
+        f"한국어 문장: {ko}\n모범 영어 답안: {model_answer}\n학습자가 말한 영어(STT 결과): {user_said}\n\n"
+        "학습자의 영어가 의미를 제대로 전달했는지 너그럽지만 정확하게 평가하라(약간의 표현 차이는 정답으로 인정). "
+        '아래 JSON으로만 출력: {"score": 0~100 정수, "verdict": "정답" 또는 "거의" 또는 "다시", '
+        '"feedback": "한국어로 따뜻하고 구체적인 1~2문장", "better": "더 자연스러운 영어 예시 1개"}'
+    )
+    try:
+        resp = client.chat.completions.create(model="gpt-4o-mini",
+                                              messages=[{"role": "user", "content": prompt}], temperature=0.4)
+        txt = resp.choices[0].message.content.strip().replace("```json", "").replace("```", "").strip()
+        return json.loads(txt)
+    except Exception:
+        return {"score": 0, "verdict": "다시", "feedback": "채점 중 문제가 생겼어요. 다시 해볼까요?", "better": model_answer}
 # ──────────────────────────────────────────────
 # 4. 방송 코너 정의
 # ──────────────────────────────────────────────
@@ -333,7 +381,7 @@ def get_news(kind):
 # ──────────────────────────────────────────────
 # 6. 대본 생성
 # ──────────────────────────────────────────────
-def generate_radio_script(fmt_key, news_content, review_str=""):
+def generate_radio_script(fmt_key, news_content, review_str="", yesterday_str="", compact=False):
     fmt = FORMATS[fmt_key]
     patterns_str = ", ".join([f"'{p['pattern']}'({p['meaning']})" for p in st.session_state['hojun_past_patterns'][:8]])
     words_str = ", ".join([f"'{w['word']}'({w['meaning']})" for w in st.session_state['hojun_past_words'][:8]])
@@ -343,38 +391,45 @@ def generate_radio_script(fmt_key, news_content, review_str=""):
         review_block = f"""
 [★ 오늘 꼭 복습할 핵심표현 '치트키' ★]
 아래 표현들은 복습 타이밍이 됐어요. 오프닝 복습 코너에서 각 표현이 '반드시 들어간' 실전 비즈니스 영어 문장을 직접 만들어 들려주고,
-한국어 해석을 붙인 뒤 "자, 따라 해보세요" → [[PAUSE:3]] → "좋아요!" 로 따라하기 시간을 꼭 주세요.
+한국어 해석을 붙인 뒤 끊어 읽기 + 따라하기를 적용하세요.
 복습 치트키: {review_str}
 """
+    yesterday_block = ""
+    if yesterday_str:
+        yesterday_block = f"""
+[★ 어제 배운 것 60초 복습 (맨 처음) ★]
+방송을 시작하면 가장 먼저, 어제 배운 표현들을 60초 안에 빠르게 짚어주세요. 각 표현의 예문 1개와 한국어 해석을 들려주고 짧게 따라하기를 시키세요.
+어제 배운 표현: {yesterday_str}
+"""
+    length_rule = ("전체 약 700~900자로 아주 짧게(핵심 표현 2~3개만). 군더더기 없이 압축." if compact
+                   else "전체 약 1800자 내외, 자연스러운 라디오 멘트체.")
     system_prompt = f"""
 당신은 아침 영어 라디오를 진행하는, 밝고 따뜻하며 살짝 장난기 있는 20대 후반 한국인 여배우 영어 선생님입니다.
 오늘의 단 한 명의 청취자는 '호준 씨'입니다. 다정하지만 과하지 않은 톤으로, 귀로 듣고 따라 말하며 배우는 라디오를 진행하세요.
-
+{yesterday_block}
 [★ 오늘의 코너: {fmt['label']} ★]
 {fmt['brief']}
 
 [★ 필수 규칙 — 영어 직후 한국어 해석 ★]
 영어 문장 직후 "이건 ~라는 뜻이에요" 하고 정확한 한국어 해석과 핵심 단어 뜻을 다정하게 바로 이어 붙이세요. 절대 영어만 말하고 넘어가지 마세요.
 
-[★ 따라하기 시간 마커 — 매우 중요 ★]
-"따라 해보세요" 라고 말한 직후에는 반드시 마커 [[PAUSE:3]] 를 넣으세요. 이 마커 자리에서 호준 씨가 직접 따라 말할 시간이 주어집니다.
-- 짧은 표현이면 [[PAUSE:3]], 긴 문장이면 [[PAUSE:4]] 또는 [[PAUSE:5]] 를 쓰세요.
-- 마커 뒤에 "좋아요!" 같은 격려를 이어가세요. (마커 없이 바로 격려로 넘어가면 안 됩니다.)
-- 같은 표현을 한 번 더 시키려면 다시 [[PAUSE:3]] 를 넣으세요.
+[★ 끊어 읽기 + 따라하기 — 매우 중요 ★]
+따라할 영어 문장은 한 번에 통으로 시키지 말고, 의미 단위(2~4단어)로 끊어서 가르치세요.
+- 끊은 조각을 하나씩 천천히 읽고, 각 조각 바로 뒤에 [[PAUSE]] 마커를 넣어 따라 말할 시간을 주세요. (마커 자리에 실제 무음이 들어가고, 길이는 조각 길이에 맞춰 자동 조절됩니다.)
+- 끊어 읽을 때 조각 사이는 줄임표(…)로 살짝 쉬어 읽으세요.
+  예) "Could you… [[PAUSE]] send me a quote… [[PAUSE]] by next Friday? [[PAUSE]]" 그 다음 "좋아요! 이번엔 전체로 한 번 더 가볼게요." 하고 전체 문장 + [[PAUSE]].
+- [[PAUSE]] 뒤에는 "좋아요!" 같은 격려를 이어가세요(마커 없이 바로 넘어가면 안 됩니다).
 
 [★ 지난 족보 복습 — 예문 + 따라하기 ★]
-오프닝에서 과거 족보 패턴({patterns_str}) 또는 단어({words_str}) 중 1~2개를 골라,
-각 표현마다 실전 예문 1~2개를 영어로 들려주고 한국어 해석을 붙이세요.
-그리고 그 예문도 "자, 저 따라 해보세요" → [[PAUSE:3]] → "좋아요!" 형태로 따라하기 시간을 꼭 주세요.
+오프닝에서 과거 족보 패턴({patterns_str}) 또는 단어({words_str}) 중 1~2개를 골라, 각 표현마다 실전 예문 1~2개를 영어로 들려주고 한국어 해석을 붙인 뒤, 위 끊어 읽기 방식으로 따라하기를 시키세요.
 {review_block}
-
 [★ 상단 텍스트 ★]
 맨 위 [Today's Text] 섹션에 핵심 영어 원문(1~3문장)을 적고, 핵심 표현은 :red[핵심 표현] 형태로 컬러 처리.
 
 [대본 구성]
 1. 📝 [Today's Text] (핵심 표현 컬러)
-2. ✨ 활기찬 오프닝 + 지난 족보 예문 복습 & 따라하기([[PAUSE]] 포함)
-3. 🎯 코너 본문 + 핵심 표현 따라하기([[PAUSE]] 포함)
+2. ✨ 오프닝 + (어제 복습이 있으면 먼저) + 지난 족보 예문 복습 & 끊어 읽기 따라하기
+3. 🎯 코너 본문 + 핵심 표현 끊어 읽기 따라하기
 4. 📐 0.5초 영작 챌린지 (한국어 문장 주고 영작 유도 → [[PAUSE:4]] → 정답/해석)
 5. 🗂️ 오늘의 노트 & 클로징
 
@@ -382,7 +437,7 @@ def generate_radio_script(fmt_key, news_content, review_str=""):
 마지막에 오늘의 핵심 단어 3개를 정리할 때, 각 단어에 한글 발음을 괄호로 달아 읽기 쉽게 하세요.
 예: "Streamline (스트림라인) — 간소화하다", "Prospective (프러스펙티브) — 잠재적인".
 
-전체 약 1800자 내외, 자연스러운 라디오 멘트체.
+{length_rule}
 
 [★ 데이터 추출 마커 — 반드시 맨 마지막 줄. 발음은 한글 음차 ★]
 |||EXTRACT|||
@@ -411,7 +466,9 @@ def parse_and_update_storage(raw_script):
             if "|" in content:
                 pat, mean = content.split("|", 1)
                 if not any(p['pattern'].lower() == pat.strip().lower() for p in st.session_state['hojun_past_patterns']):
-                    st.session_state['hojun_past_patterns'].append({"pattern": pat.strip(), "meaning": mean.strip()})
+                    np = {"pattern": pat.strip(), "meaning": mean.strip()}
+                    _ensure_srs(np); np['added'] = str(date.today())
+                    st.session_state['hojun_past_patterns'].append(np)
                     added += 1
         elif "NEW_WORD" in line:
             try:
@@ -425,7 +482,9 @@ def parse_and_update_storage(raw_script):
                 else:
                     wrd, pron, mean = bits[0], "", bits[1]
                 if not any(w['word'].lower() == wrd.lower() for w in st.session_state['hojun_past_words']):
-                    st.session_state['hojun_past_words'].append({"word": wrd, "pron": pron, "meaning": mean})
+                    nw = {"word": wrd, "pron": pron, "meaning": mean}
+                    _ensure_srs(nw); nw['added'] = str(date.today())
+                    st.session_state['hojun_past_words'].append(nw)
                     added += 1
     st.session_state['total_learned'] += added
     return clean_script
@@ -461,6 +520,11 @@ def _chunk_text(text, limit=1600):
         chunks.append(cur)
     return chunks
 
+def _auto_pause_seconds(seg):
+    """따라할 영어 분량(단어수)에 비례해 쉬는 시간 자동 산정 (2.5~8초)."""
+    n = len(re.findall(r"[A-Za-z']+", seg))
+    return max(2.5, min(8.0, n * 0.55 + 1.6))
+
 def text_to_speech(text, voice=None):
     voice = voice or st.session_state['voice']
 
@@ -485,9 +549,10 @@ def text_to_speech(text, voice=None):
         seg = parts[i]
         if seg and seg.strip():
             audio += _tts_one(seg)
-        if i + 1 < len(parts):           # 다음 원소는 캡처된 초(또는 None)
+        if i + 1 < len(parts):                 # 다음 원소는 캡처된 초(또는 None)
             dur = parts[i + 1]
-            seconds = float(dur) if dur else 3.5   # 기본 3.5초 따라하기 시간
+            # 숫자 지정이 있으면 그대로, 없으면 직전 문장 길이에 맞춰 자동 조절
+            seconds = float(dur) if dur else _auto_pause_seconds(seg or "")
             reps = max(1, round(seconds / 0.5))
             audio += SILENCE_05 * reps
         i += 2
@@ -548,7 +613,7 @@ with st.sidebar:
                 st.session_state['lesson_title'] = w['word']
                 st.session_state['instant_audio'] = text_to_speech(lesson)
 
-# 즉석 레슨
+# 즉석 레슨 (공통 — 어느 탭에서든 표시)
 if 'instant_lesson' in st.session_state:
     st.success(f"🎯 원포인트 레슨: [{st.session_state['lesson_title']}]")
     st.audio(st.session_state['instant_audio'], format="audio/mp3")
@@ -557,113 +622,158 @@ if 'instant_lesson' in st.session_state:
         del st.session_state['instant_lesson']; del st.session_state['instant_audio']; st.rerun()
     st.divider()
 
-# 🔁 오늘의 복습 (간격 반복)
-due_items = get_due_items()
-st.subheader(f"🔁 오늘의 복습 ({len(due_items)})")
-if not due_items:
-    st.caption("오늘 복습할 표현이 없어요. 방송을 들으면 새 표현이 쌓이고, 시간이 지나면 복습 타이밍이 떠요.")
-else:
-    st.caption("복습 타이밍이 된 치트키예요. 문장으로 불러와 따라 말해보고, '기억나요/다시'로 다음 복습 간격을 정해요.")
-    if st.button("📥 오늘 복습할 치트키 문장 불러오기", use_container_width=True):
-        with st.spinner("치트키가 들어간 실전 문장 만드는 중..."):
-            for _t, d, expr, mean in due_items:
-                if not d.get('ex'):
-                    d['ex'] = make_cheat_sentences(expr, mean)
-        save_progress(); st.rerun()
-    for i, (_t, d, expr, mean) in enumerate(due_items):
-        with st.expander(f"🔑 {expr} — {mean}"):
-            if d.get('ex'):
-                say = ""
-                for e in d['ex']:
-                    st.markdown(f"- **{e['en']}**  \n  ↳ {e['ko']}")
-                    say += f"{e['en']}. 이건 '{e['ko']}'라는 뜻이에요. 자, 따라 해보세요. [[PAUSE:3]] 좋아요! "
-                if st.button("🔊 예문 듣고 따라하기", key=f"revaud_{i}"):
-                    with st.spinner("녹음 중..."):
-                        st.session_state[f'revbytes_{i}'] = text_to_speech(say)
-                if f'revbytes_{i}' in st.session_state:
-                    st.audio(st.session_state[f'revbytes_{i}'], format="audio/mp3")
-            else:
-                st.caption("위 버튼으로 치트키 문장을 먼저 불러오세요.")
-            ca, cb = st.columns(2)
-            if ca.button("😊 기억나요", key=f"easy_{i}", use_container_width=True):
-                review_item(d, "easy"); save_progress(); st.rerun()
-            if cb.button("😵 다시", key=f"again_{i}", use_container_width=True):
-                review_item(d, "again"); save_progress(); st.rerun()
-st.divider()
+tab_radio, tab_quiz, tab_review, tab_lib = st.tabs(["📻 라디오", "🎤 말하기 퀴즈", "🔁 복습", "📼 보관함"])
 
-# 코너 선택
-st.subheader("🎚️ 오늘 어떤 방송 들을까요?")
-mode = st.radio("코너 선택", ["🎲 랜덤 (오늘의 깜짝 코너)"] + [v["label"] for v in FORMATS.values()],
-                label_visibility="collapsed")
+# ══════════════ 📻 라디오 탭 ══════════════
+with tab_radio:
+    st.subheader("🎚️ 오늘 어떤 방송 들을까요?")
+    mode = st.radio("코너 선택", ["🎲 랜덤 (오늘의 깜짝 코너)"] + [v["label"] for v in FORMATS.values()],
+                    label_visibility="collapsed")
+    compact = st.toggle("⚡ 5분 압축 모드 — 핵심 표현만 짧게 (바쁜 날 추천)")
 
-if st.button("▶️ 오늘 자 방송 듣기", use_container_width=True, type="primary"):
-    fmt_key = random.choice(list(FORMATS.keys())) if mode.startswith("🎲") else next(k for k, v in FORMATS.items() if v["label"] == mode)
-    fmt = FORMATS[fmt_key]
-    news_content = None
-    if fmt["needs_news"]:
-        with st.spinner("📡 오늘의 뉴스를 가져오는 중..."):
-            news_content = get_news(fmt["needs_news"])
-    st.toast(f"오늘의 코너: {fmt['label']}")
-    # 복습 타이밍 된 치트키 표현 최대 3개 우선 편성
-    due_pick = get_due_items()[:3]
-    review_str = ", ".join(f"'{it[2]}'({it[3]})" for it in due_pick)
-    with st.spinner("🎙️ 선생님이 원고를 톡톡 튀게 쓰는 중..."):
-        script_raw = parse_and_update_storage(generate_radio_script(fmt_key, news_content, review_str))
-    with st.spinner("🎵 밝고 따뜻한 목소리로 녹음 중 (약 10초)..."):
-        audio = text_to_speech(script_raw)   # 마커 포함 원본으로 무음 삽입
-    script_display = strip_pause_markers(script_raw)
-    today = str(date.today())
-    if st.session_state['last_date'] != today:
-        st.session_state['day_count'] += 1
-        st.session_state['last_date'] = today
-    # 방송에서 복습된 치트키는 간격을 늘려 다음 복습일로 미룸
-    for it in due_pick:
-        review_item(it[1], "easy")
-    st.session_state['current_script'] = script_display
-    st.session_state['current_audio'] = audio
-    st.session_state['current_theme'] = fmt['label']
-    save_broadcast(script_display, audio, fmt['label'])
-    save_progress()
-    st.rerun()
+    if st.button("▶️ 오늘 자 방송 듣기", use_container_width=True, type="primary"):
+        fmt_key = random.choice(list(FORMATS.keys())) if mode.startswith("🎲") else next(k for k, v in FORMATS.items() if v["label"] == mode)
+        fmt = FORMATS[fmt_key]
+        news_content = None
+        if fmt["needs_news"]:
+            with st.spinner("📡 오늘의 뉴스를 가져오는 중..."):
+                news_content = get_news(fmt["needs_news"])
+        st.toast(f"오늘의 코너: {fmt['label']}")
+        # 어제 배운 것 60초 복습 + 복습 타이밍 된 치트키 최대 3개
+        yesterday = get_yesterday_items()
+        yesterday_str = ", ".join(f"'{e}'({m})" for e, m in yesterday)
+        due_pick = get_due_items()[:3]
+        review_str = ", ".join(f"'{it[2]}'({it[3]})" for it in due_pick)
+        with st.spinner("🎙️ 선생님이 원고를 톡톡 튀게 쓰는 중..."):
+            script_raw = parse_and_update_storage(
+                generate_radio_script(fmt_key, news_content, review_str, yesterday_str, compact))
+        with st.spinner("🎵 밝고 따뜻한 목소리로 녹음 중..."):
+            audio = text_to_speech(script_raw)
+        script_display = strip_pause_markers(script_raw)
+        today = str(date.today())
+        if st.session_state['last_date'] != today:
+            st.session_state['day_count'] += 1
+            st.session_state['last_date'] = today
+        for it in due_pick:
+            review_item(it[1], "easy")
+        st.session_state['current_script'] = script_display
+        st.session_state['current_audio'] = audio
+        st.session_state['current_theme'] = fmt['label']
+        save_broadcast(script_display, audio, fmt['label'])
+        save_progress()
+        st.rerun()
 
-# 현재 방송
-if st.session_state['current_script']:
-    st.success(f"✨ 방송 준비 완료 — {st.session_state['current_theme']}")
-    st.markdown("### 🎧 오디오 스트리밍")
-    st.audio(st.session_state['current_audio'], format="audio/mp3")
-    st.download_button("⬇️ 이 방송 폰에 저장 (mp3)", data=st.session_state['current_audio'],
-                       file_name=f"영라디오_{datetime.now().strftime('%m%d_%H%M')}.mp3",
-                       mime="audio/mp3", use_container_width=True)
-    st.caption("ℹ️ AI 합성 음성입니다." + ("  ·  ☁️ 구글 드라이브 보관함에 자동 저장됐어요." if DRIVE else "  ·  보관함에 자동 저장됐어요."))
-    st.markdown("---")
-    st.markdown(st.session_state['current_script'])
-else:
-    st.write("버튼을 누르면 비타민처럼 활기찬 여배우의 영어 라디오가 시작됩니다 🎶")
-
-# 보관함
-st.divider()
-library = load_library()
-st.subheader(f"📼 보관함 ({len(library)})" + ("  ☁️" if DRIVE else ""))
-if not library:
-    st.caption("아직 저장된 방송이 없어요. 방송을 들으면 여기에 쌓입니다.")
-else:
-    labels = [f"{b['date']} · {b['theme']}" for b in library]
-    idx = st.selectbox("다시 들을 방송", range(len(library)), format_func=lambda i: labels[i], label_visibility="collapsed")
-    chosen = library[idx]
-    audio_bytes = read_broadcast_audio(chosen)
-    if audio_bytes:
-        st.audio(audio_bytes, format="audio/mp3")
-        a, b = st.columns(2)
-        a.download_button("⬇️ 폰에 저장", data=audio_bytes, file_name=chosen["audio"],
-                          mime="audio/mp3", use_container_width=True, key=f"dl_{chosen['id']}")
-        if b.button("🗑️ 삭제", use_container_width=True, key=f"del_{chosen['id']}"):
-            delete_broadcast(chosen); st.rerun()
-        with st.expander("📄 대본 보기"):
-            st.markdown(chosen["script"])
+    if st.session_state['current_script']:
+        st.success(f"✨ 방송 준비 완료 — {st.session_state['current_theme']}")
+        st.markdown("### 🎧 오디오 스트리밍")
+        st.audio(st.session_state['current_audio'], format="audio/mp3")
+        st.download_button("⬇️ 이 방송 폰에 저장 (mp3)", data=st.session_state['current_audio'],
+                           file_name=f"영라디오_{datetime.now().strftime('%m%d_%H%M')}.mp3",
+                           mime="audio/mp3", use_container_width=True)
+        st.caption("ℹ️ AI 합성 음성입니다." + ("  ·  ☁️ 드라이브 보관함에 자동 저장됐어요." if DRIVE else "  ·  보관함에 자동 저장됐어요."))
+        st.markdown("---")
+        st.markdown(st.session_state['current_script'])
     else:
-        st.warning("오디오를 찾지 못했어요.")
-        if st.button("🗑️ 목록에서 제거", key=f"delm_{chosen['id']}"):
-            delete_broadcast(chosen); st.rerun()
+        st.write("버튼을 누르면 비타민처럼 활기찬 여배우의 영어 라디오가 시작됩니다 🎶")
 
-if DRIVE:
-    st.caption("📱 폰에서 바로 듣기: 구글 드라이브 앱 → '영라디오' 폴더 → mp3 파일 탭하면 재생돼요.")
+# ══════════════ 🎤 말하기 퀴즈 탭 ══════════════
+with tab_quiz:
+    st.subheader("🎤 한국어 → 영어 말하기 퀴즈")
+    st.caption("한국어 문장을 영어로 말해보세요. 녹음하면 AI가 알아듣고 채점해줘요. (조용한 곳·정차 시 권장)")
+    if st.button("🎲 새 문제 받기", use_container_width=True, type="primary"):
+        with st.spinner("문제 만드는 중..."):
+            st.session_state['quiz'] = generate_quiz()
+            st.session_state.pop('quiz_result', None)
+    if 'quiz' in st.session_state:
+        q = st.session_state['quiz']
+        st.markdown(f"#### 🇰🇷 {q['ko']}")
+        st.caption("👆 이 문장을 영어로 말해보세요")
+        if hasattr(st, "audio_input"):
+            rec = st.audio_input("🎙️ 여기를 눌러 녹음", key="quiz_mic")
+            if rec is not None and st.button("✅ 제출하고 채점받기", use_container_width=True, type="primary"):
+                with st.spinner("듣고 채점하는 중..."):
+                    try:
+                        said = transcribe_audio(rec.getvalue())
+                    except Exception:
+                        said = ""
+                    result = grade_answer(q['ko'], q['answer'], said)
+                    result['said'] = said
+                    st.session_state['quiz_result'] = result
+        else:
+            st.warning("음성 녹음(st.audio_input)은 최신 Streamlit이 필요해요. requirements.txt의 streamlit을 최신으로 올려 주세요.")
+        if 'quiz_result' in st.session_state:
+            r = st.session_state['quiz_result']
+            st.markdown(f"🗣️ **내가 말한 영어:** {r.get('said','(인식 실패)')}")
+            v, score = r.get('verdict', ''), r.get('score', 0)
+            if v == "정답":
+                st.success(f"🎉 {v} · {score}점")
+            elif v == "거의":
+                st.warning(f"👍 {v} · {score}점")
+            else:
+                st.error(f"💪 {v} · {score}점")
+            st.info(r.get('feedback', ''))
+            st.markdown(f"✨ **더 자연스럽게:** {r.get('better','')}")
+            st.caption(f"모범 답안: {q['answer']}")
+    else:
+        st.write("‘새 문제 받기’를 눌러 시작해요. 족보에 쌓인 표현이 문제로 나옵니다.")
+
+# ══════════════ 🔁 복습 탭 ══════════════
+with tab_review:
+    due_items = get_due_items()
+    st.subheader(f"🔁 오늘의 복습 ({len(due_items)})")
+    if not due_items:
+        st.caption("오늘 복습할 표현이 없어요. 방송을 들으면 새 표현이 쌓이고, 시간이 지나면 복습 타이밍이 떠요.")
+    else:
+        st.caption("복습 타이밍이 된 치트키예요. 문장으로 불러와 따라 말해보고, '기억나요/다시'로 다음 복습 간격을 정해요.")
+        if st.button("📥 오늘 복습할 치트키 문장 불러오기", use_container_width=True):
+            with st.spinner("치트키가 들어간 실전 문장 만드는 중..."):
+                for _t, d, expr, mean in due_items:
+                    if not d.get('ex'):
+                        d['ex'] = make_cheat_sentences(expr, mean)
+            save_progress(); st.rerun()
+        for i, (_t, d, expr, mean) in enumerate(due_items):
+            with st.expander(f"🔑 {expr} — {mean}"):
+                if d.get('ex'):
+                    say = ""
+                    for e in d['ex']:
+                        st.markdown(f"- **{e['en']}**  \n  ↳ {e['ko']}")
+                        say += f"{e['en']}. 이건 '{e['ko']}'라는 뜻이에요. 자, 따라 해보세요. [[PAUSE]] 좋아요! "
+                    if st.button("🔊 예문 듣고 따라하기", key=f"revaud_{i}"):
+                        with st.spinner("녹음 중..."):
+                            st.session_state[f'revbytes_{i}'] = text_to_speech(say)
+                    if f'revbytes_{i}' in st.session_state:
+                        st.audio(st.session_state[f'revbytes_{i}'], format="audio/mp3")
+                else:
+                    st.caption("위 버튼으로 치트키 문장을 먼저 불러오세요.")
+                ca, cb = st.columns(2)
+                if ca.button("😊 기억나요", key=f"easy_{i}", use_container_width=True):
+                    review_item(d, "easy"); save_progress(); st.rerun()
+                if cb.button("😵 다시", key=f"again_{i}", use_container_width=True):
+                    review_item(d, "again"); save_progress(); st.rerun()
+
+# ══════════════ 📼 보관함 탭 ══════════════
+with tab_lib:
+    library = load_library()
+    st.subheader(f"📼 보관함 ({len(library)})" + ("  ☁️" if DRIVE else ""))
+    if not library:
+        st.caption("아직 저장된 방송이 없어요. 방송을 들으면 여기에 쌓입니다.")
+    else:
+        labels = [f"{b['date']} · {b['theme']}" for b in library]
+        idx = st.selectbox("다시 들을 방송", range(len(library)), format_func=lambda i: labels[i], label_visibility="collapsed")
+        chosen = library[idx]
+        audio_bytes = read_broadcast_audio(chosen)
+        if audio_bytes:
+            st.audio(audio_bytes, format="audio/mp3")
+            a, b = st.columns(2)
+            a.download_button("⬇️ 폰에 저장", data=audio_bytes, file_name=chosen["audio"],
+                              mime="audio/mp3", use_container_width=True, key=f"dl_{chosen['id']}")
+            if b.button("🗑️ 삭제", use_container_width=True, key=f"del_{chosen['id']}"):
+                delete_broadcast(chosen); st.rerun()
+            with st.expander("📄 대본 보기"):
+                st.markdown(chosen["script"])
+        else:
+            st.warning("오디오를 찾지 못했어요.")
+            if st.button("🗑️ 목록에서 제거", key=f"delm_{chosen['id']}"):
+                delete_broadcast(chosen); st.rerun()
+    if DRIVE:
+        st.caption("📱 폰에서 바로 듣기: 구글 드라이브 앱 → '영라디오' 폴더 → mp3 파일 탭하면 재생돼요.")
