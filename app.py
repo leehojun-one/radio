@@ -456,6 +456,48 @@ FORMULA_PACKS = {
     "💼 비즈니스 팩 (영업 실무)": FORMULAS_BUSINESS,
 }
 
+# ──────────────────────────────────────────────
+# 영작 엔진 — 문장을 만들어내는 뼈대 10개 (우선순위 순)
+WRITING_ENGINES = [
+    {"id": "be_verb", "title": "1. be동사 vs 일반동사",
+     "point": "모든 문장의 출발점. 상태(~이다/~하다 형용사)는 be동사, 동작은 일반동사. 'I am happy'(O) / 'I happy'(X)."},
+    {"id": "five_forms", "title": "2. 문장 5형식 (골격)",
+     "point": "부품을 어순에 맞게 놓는 틀. 1형식(주+동), 2형식(주+동+보어), 3형식(주+동+목적어), 4형식(주+동+사람+사물), 5형식(주+동+목적어+그걸 설명하는 말)."},
+    {"id": "tense", "title": "3. 실전 시제 6개",
+     "point": "현재/과거/미래 + 현재진행(~하고 있다)/현재완료(~해본 적/막 ~했다)/과거. '했어요/하고 있어요/해본 적 있어요'를 구분."},
+    {"id": "modal", "title": "4. 조동사 (뉘앙스)",
+     "point": "can/could/will/would/should/might. 같은 문장도 '할 수 있어요/해주실래요(공손)/해야 해요/아마요'로 강도와 공손함이 바뀜."},
+    {"id": "question_negative", "title": "5. 의문문·부정문",
+     "point": "긍정문을 질문(~인가요?)·부정(~아니에요)으로 바꾸기. do/does/did 넣기, be동사는 자리 바꾸기(도치)."},
+    {"id": "to_ing", "title": "6. to부정사 / 동명사",
+     "point": "'~하는 것'. want to do(하고 싶다), enjoy doing(하기를 즐기다). 동사마다 뒤에 to-동사 or -ing가 정해져 있음."},
+    {"id": "relative", "title": "7. 관계대명사 (문장 잇기)",
+     "point": "who/which/that으로 명사를 꾸며 길게 연결. 'the client who called me'(나에게 전화한 그 고객)."},
+    {"id": "preposition", "title": "8. 전치사 감각",
+     "point": "in/on/at/by/for/with… 한국어엔 없는 감각이라 제일 자주 틀림. 시간·장소·방향·수단의 작은 차이."},
+    {"id": "conjunction", "title": "9. 접속사 (연결)",
+     "point": "and/but/so/because/although로 문장을 자연스럽게 잇기. 짧은 문장을 한 문장으로 묶는 힘."},
+    {"id": "article_plural", "title": "10. 관사·셀 수 있는 명사",
+     "point": "a/an/the, 단수·복수. 한국어에 없어서 계속 빠뜨리는 부분. 'a quote / the quote / quotes'의 차이."},
+]
+
+def generate_engine_lesson(engine):
+    """영작 엔진 1개에 대한 미니 레슨 (호준 씨 맞춤 예문 + 흔한 실수 + 따라하기)."""
+    system_prompt = (
+        "당신은 밝고 따뜻한 20대 후반 한국인 여배우 영어 선생님입니다. 호준 씨(KCC 창호 B2B 영업팀장)에게 "
+        "영작에 꼭 필요한 문법 '엔진' 하나를 귀로 듣고 따라 말하며 익히게 가르칩니다.\n"
+        "규칙: ① 핵심 규칙을 일상 비유로 아주 쉽게 ② 한국인이 자주 하는 실수 1개와 교정(틀린 문장→고친 문장) "
+        "③ 호준 씨의 영업/일상 예문 3개(영어 직후 반드시 한국어 해석) ④ 각 예문은 의미 단위로 끊어 읽고 각 조각 뒤 [[PAUSE]] 마커로 따라 말할 시간을 주고 '좋아요!'로 이어가기. "
+        "전체 약 900~1200자, 다정한 라디오 멘트체."
+    )
+    user = f"오늘의 영작 엔진: {engine['title']}\n핵심: {engine['point']}\n이걸로 미니 레슨을 만들어 주세요."
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user}],
+        temperature=0.8,
+    )
+    return resp.choices[0].message.content
+
 FORMATS = {
     "korea_news": {"label": "🇰🇷 국내 주요 뉴스", "needs_news": "korea",
         "brief": "오늘 한국의 주요 뉴스 하나를 골라 쉬운 영어로 소개하고 핵심 표현을 가르쳐 주세요. 정치적으로 민감한 사안은 중립적으로 사실만 짧게 다루세요."},
@@ -805,7 +847,8 @@ if 'instant_lesson' in st.session_state:
         del st.session_state['instant_lesson']; del st.session_state['instant_audio']; st.rerun()
     st.divider()
 
-tab_radio, tab_quiz, tab_review, tab_lib = st.tabs(["📻 라디오", "🎤 말하기 퀴즈", "🔁 복습", "📼 보관함"])
+tab_radio, tab_quiz, tab_engine, tab_review, tab_lib = st.tabs(
+    ["📻 라디오", "🎤 말하기 퀴즈", "📐 영작 엔진", "🔁 복습", "📼 보관함"])
 
 # ══════════════ 📻 라디오 탭 ══════════════
 with tab_radio:
@@ -926,6 +969,35 @@ with tab_quiz:
             st.caption(f"모범 답안: {q['answer']}")
     else:
         st.write("‘새 문제 받기’를 눌러 시작해요. 족보에 쌓인 표현이 문제로 나옵니다.")
+
+# ══════════════ 📐 영작 엔진 탭 ══════════════
+with tab_engine:
+    st.subheader("📐 영작 엔진 — 문장을 만드는 뼈대 10개")
+    st.caption("공식이 '덩어리'라면, 이건 문장을 굴러가게 하는 엔진이에요. 우선순위 순으로 하나씩 익혀요.")
+    if st.button("➕ 영작 엔진 10개를 복습 족보에 넣기", use_container_width=True):
+        added = 0
+        for e in WRITING_ENGINES:
+            tag = f"[영작엔진] {e['title']}"
+            if not any(p['pattern'] == tag for p in st.session_state['hojun_past_patterns']):
+                nf = {"pattern": tag, "meaning": e['point']}
+                _ensure_srs(nf); nf['added'] = str(date.today())
+                st.session_state['hojun_past_patterns'].append(nf)
+                added += 1
+        save_progress()
+        st.toast(f"영작 엔진 {added}개를 복습에 추가!" if added else "이미 다 들어가 있어요!")
+        st.rerun()
+    st.divider()
+    for i, e in enumerate(WRITING_ENGINES):
+        with st.expander(f"📐 {e['title']}"):
+            st.markdown(e['point'])
+            if st.button("🔊 미니 레슨 듣기", key=f"eng_{e['id']}", use_container_width=True):
+                with st.spinner("🎙️ 호준 님 맞춤 영작 레슨 만드는 중..."):
+                    lesson_raw = generate_engine_lesson(e)
+                    st.session_state[f'englesson_{i}'] = strip_pause_markers(lesson_raw)
+                    st.session_state[f'engaudio_{i}'] = text_to_speech(lesson_raw)
+            if f'engaudio_{i}' in st.session_state:
+                st.audio(st.session_state[f'engaudio_{i}'], format="audio/wav")
+                st.markdown(st.session_state[f'englesson_{i}'])
 
 # ══════════════ 🔁 복습 탭 ══════════════
 with tab_review:
