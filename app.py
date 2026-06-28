@@ -104,6 +104,14 @@ def drive_delete(file_id):
 # 2. 진도/족보 영구 저장
 # ──────────────────────────────────────────────
 def load_progress():
+    # 드라이브 연동 시 드라이브에서 먼저 복원
+    if DRIVE:
+        try:
+            fid = _drive_find(PROGRESS_FILE)
+            if fid:
+                return json.loads(drive_download(fid).decode("utf-8"))
+        except Exception:
+            pass
     if os.path.exists(PROGRESS_FILE):
         try:
             with open(PROGRESS_FILE, "r", encoding="utf-8") as f:
@@ -121,11 +129,19 @@ def save_progress():
         "total_learned": st.session_state['total_learned'],
         "voice": st.session_state['voice'],
     }
+    payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+    # 로컬 저장 (캐시/폴백)
     try:
-        with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        with open(PROGRESS_FILE, "wb") as f:
+            f.write(payload)
     except Exception:
         pass
+    # 드라이브 저장 (영구 보관)
+    if DRIVE:
+        try:
+            drive_upload(PROGRESS_FILE, payload, "application/json")
+        except Exception:
+            pass
 
 # ── 보관함 (드라이브 우선, 없으면 로컬) ──
 def load_library():
@@ -644,6 +660,8 @@ with st.sidebar:
 
     st.header("🗂️ 영어 족보")
     st.caption("표현을 누르면 즉석 오디오 레슨이 시작돼요.")
+    st.caption("☁️ 족보·복습이 구글 드라이브에 자동 백업돼요." if DRIVE
+               else "💾 족보·복습은 로컬에 저장돼요. (드라이브 연동 시 영구 백업)")
     st.subheader("📝 핵심 패턴")
     for p in st.session_state['hojun_past_patterns']:
         if st.button(f"🔗 {p['pattern']} ({p['meaning']})", key=f"pat_{p['pattern']}", use_container_width=True):
